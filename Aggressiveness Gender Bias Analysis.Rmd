@@ -1,0 +1,289 @@
+---
+title: "Aggressiveness Gender Bias Analysis"
+output: html_notebook
+---
+
+```{r}
+library(data.table)
+library(dplyr)
+
+library(sandwich)
+library(lmtest)
+
+library(AER) 
+
+library(ggplot2) 
+library(patchwork)
+library(stargazer)
+```
+
+```{r}
+d <- fread('w241_project_survey_results_final.xlsx - Sheet1.csv')
+```
+
+```{r}
+#Rename column names for easier analysis
+names(d) <- c("start_date","end_date","ip_address","duration","response_id","randnum_id","latitude",
+              "longitude","gender","age","education","work_experience","race","race_other_text","treatment",
+              "q1_salary_increase","q2_start_convo","q3_reason_deny","q4_aggressive","q5_aggressive_sean",
+              "q6_internal_external","q7_internal_external_sean", "duration_page")
+
+#Create variable for blocks
+d$block <- paste(d$gender,", ",d$age)
+
+#Group race responses
+d$race_group <- ifelse(d$race %in% c('White','Asian','Other','American Indian or Alaska Native',
+                                    'Native Hawaiian or Pacific Islander','Black or African American'),
+                       d$race,'Multiple Races')
+
+head(d)
+```
+
+
+
+
+```{r}
+# Check for Non-compliance
+
+# 1 - number of correct vs non-correct answers for sanity check question #1
+ggplot(data=d, aes(x=d$q1_salary_increase)) + 
+  geom_bar(color='#31869b', fill='#b7dee8') +
+  geom_text(stat = "count", aes(label = after_stat(count)), vjust = -0.5) +
+  theme_classic()
+```
+```{r}
+# 2 - number of correct vs non-correct answers for sanity check question #2
+ggplot(data=d, aes(x=d$q2_start_convo)) + 
+  geom_bar(color='#31869b', fill='#b7dee8') +
+  geom_text(stat = "count", aes(label = after_stat(count)), vjust = -0.5) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle=5))
+```
+```{r}
+# 3 - number of correct vs non-correct answers for sanity check question #3
+ggplot(data=d, aes(x=d$q3_reason_deny)) + 
+  geom_bar(color='#31869b', fill='#b7dee8') +
+  geom_text(stat = "count", aes(label = after_stat(count)), vjust = -0.5) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle=5))
+```
+
+
+```{r}
+# obvious non-compliers based on sanity questions
+nc_1 <- sum(d$q1_salary_increase != "15%" & 
+      d$q2_start_convo != "Recapped the work [he/she] has done over the past year" & 
+      d$q3_reason_deny != "Does not have the budget for salary increases")
+
+nc_2 <- sum(d$q1_salary_increase == "15%" & 
+      d$q2_start_convo != "Recapped the work [he/she] has done over the past year" & 
+      d$q3_reason_deny != "Does not have the budget for salary increases")
+
+nc_3 <- sum(d$q1_salary_increase != "15%" & 
+      d$q2_start_convo == "Recapped the work [he/she] has done over the past year" & 
+      d$q3_reason_deny != "Does not have the budget for salary increases")
+
+nc_4 <- sum(d$q1_salary_increase != "15%" & 
+      d$q2_start_convo != "Recapped the work [he/she] has done over the past year" & 
+      d$q3_reason_deny == "Does not have the budget for salary increases")
+
+paste0("number of participants that answered all three sanity questions incorrectly: ", nc_1)
+paste0("number of participants that answered at least 2 sanity questions incorrectly: ", nc_2 + nc_3 + nc_4)
+paste0("number of potential non-compliers based on sanity questions: ", nc_1 + nc_2 + nc_3 + nc_4)
+```
+
+```{r}
+c <- sum(d$q1_salary_increase == "15%" & 
+      d$q2_start_convo == "Recapped the work [he/she] has done over the past year" & 
+      d$q3_reason_deny == "Does not have the budget for salary increases")
+paste0("number of participants that answered all three sanity questions correctly: ", c)
+```
+
+```{r}
+# 4 - time used to complete the survey
+ggplot(data=d, aes(x=d$duration)) + 
+  geom_histogram(color='#31869b', fill='#b7dee8', binwidth = 20) +
+  theme_classic()
+```
+```{r}
+duration_q <- quantile(d$duration, probs = c(0.05, 0.95))
+# sd on original data
+original_sd <- sd(d$duration)
+# filter out people that "cook" time based on 95% quantile
+d2 <- d[d$duration < duration_q[2]]
+
+ggplot(data=d2, aes(x=d2$duration)) + 
+  geom_histogram(color='#31869b', fill='#b7dee8', binwidth = 20) +
+  theme_classic()
+```
+
+
+```{r}
+# check max value on the new data
+max_d_d2 <- max(d2$duration)
+# get sd on filtered data for a more reasonable sd
+standard_d <- sd(d2$duration)
+me <- summary(d2$duration)[4]
+one_sd <- me - standard_d
+# count non-compliers
+paste0("potential non-compliers based on time spent on survey: ", sum(d$duration < one_sd))
+```
+
+
+```{r}
+
+compliers  <- d[q1_salary_increase == "15%" &
+      q2_start_convo == "Recapped the work [he/she] has done over the past year" &
+      q3_reason_deny == "Does not have the budget for salary increases" & 
+      duration < duration_q[2]]
+
+
+nrow(compliers)/nrow(d)
+mean(d[treatment == 'Kevin',q4_aggressive])
+mean(d[treatment == 'Kelly',q4_aggressive])
+```
+
+```{r}
+#High-level respondent demographics
+table(compliers$age)
+prop.table(table(compliers$age))
+
+table(compliers$gender)
+prop.table(table(compliers$gender))
+
+table(compliers$education)
+prop.table(table(compliers$education))
+
+table(compliers$work_experience)
+prop.table(table(compliers$work_experience))
+
+table(compliers$race_group)
+prop.table(table(compliers$race_group))
+```
+
+```{r}
+#Get number of responses in each block
+table(d$age, d$gender)
+table(compliers$age, compliers$gender)
+```
+
+```{r}
+#Histogram of aggressiveness - Kevin vs Kelly
+ggplot(data = compliers) + 
+  geom_histogram(mapping = aes(x = q4_aggressive), binwidth = 1, color='#31869b', fill='#b7dee8') +
+  labs(title="Aggressiveness Responses - Kevin vs Kelly") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_x_continuous(name="Aggressiveness", breaks=seq(0,10,1))+
+  facet_wrap(~factor(treatment, levels=c('Kevin','Kelly')))
+
+aggregate(q4_aggressive ~ treatment, compliers, mean)
+```
+
+```{r plot}
+#Aggressiveness Responses - Female vs Male Respondents
+ggplot(data = compliers[gender %in% c("Female","Male"),]) + 
+  geom_histogram(mapping = aes(x = q4_aggressive), binwidth = 1, color='#31869b', fill='#b7dee8') +
+  labs(title="Aggressiveness Responses - Female vs Male Respondents") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_x_continuous(name="Aggressiveness", breaks=seq(0,10,1)) +
+  facet_grid(factor(treatment, levels=c('Kevin','Kelly'))~gender)
+
+aggregate(q4_aggressive ~ treatment + gender, compliers, mean)
+```
+
+```{r}
+#Aggressiveness Responses - Female Respondents, by Age Group
+ggplot(data = subset(compliers, compliers$gender=="Female" & age != 'Prefer not to say')) + 
+  geom_histogram(mapping = aes(x = q4_aggressive), binwidth = 1, color='#31869b', fill='#b7dee8') +
+  labs(title="Aggressiveness Responses - Female Respondents, by Age Group") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_x_continuous(name="Aggressiveness", breaks=seq(0,10,1)) +
+  facet_grid(factor(treatment, levels=c('Kevin','Kelly')) ~ age)
+
+aggregate(q4_aggressive ~ treatment + age, compliers[gender=='Female'], mean)
+```
+
+```{r}
+#Aggressiveness Responses - Male Respondents, by Age Group
+ggplot(data = subset(compliers,compliers$gender=="Male" & age != 'Prefer not to say')) + 
+  geom_histogram(mapping = aes(x = q4_aggressive), binwidth = 1, color='#31869b', fill='#b7dee8') +
+  labs(title="Aggressiveness Responses - Male Respondents, by Age Group") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_x_continuous(name="Aggressiveness", breaks=seq(0,10,1)) +
+  facet_grid(factor(treatment, levels=c('Kevin','Kelly')) ~ age)
+
+aggregate(q4_aggressive ~ treatment + age, compliers[gender=='Male'], mean)
+```
+
+```{r}
+
+#Naive test
+naive_test <- t.test(d[treatment == 'Kelly',q4_aggressive],
+                     d[treatment == 'Kevin',q4_aggressive],
+                     paired = FALSE,
+                     alternative = "two.sided")
+naive_test
+
+compliers_test <-t.test(compliers[treatment == 'Kelly',q4_aggressive],
+                     compliers[treatment == 'Kevin',q4_aggressive],
+                     paired = FALSE,
+                     alternative = "two.sided")
+compliers_test
+```
+
+```{r}
+#Naive model solely estimated on blocks
+naive_model <- d[, lm(q4_aggressive ~ treatment + block)]
+naive_model$vcovHC_ <- vcovHC(naive_model, type = "HC0")
+coeftest(naive_model, vcov. = naive_model$vcovHC_)
+
+stargazer(naive_model,type='text',
+          se = list(sqrt(diag(naive_model$vcovHC_))),
+          column.labels = "Naive",
+          header = F)
+```
+
+```{r}
+#Model estimated with noncompliers eliminated with baseline incorporated, using blocks
+model_block_baseline <- d[, lm(q4_aggressive ~ treatment + block + q5_aggressive_sean)]
+model_block_baseline$vcovHC_ <- vcovHC(model_block_baseline, type = "HC0")
+coeftest(model_block_baseline, vcov. = model_block_baseline$vcovHC_)
+
+stargazer(model_block_baseline,type='text',
+          se = list(sqrt(diag(model_block_baseline$vcovHC_))),
+          column.labels = "Baseline Controlled",
+          header = F)
+```
+
+```{r}
+#Model estimated with noncompliers eliminated with baseline incorporated, using blocks
+model_block_baseline_compliers <- d[(q1_salary_increase == "15%" &
+      q2_start_convo == "Recapped the work [he/she] has done over the past year" &
+      q3_reason_deny == "Does not have the budget for salary increases" & 
+      duration < duration_q[2]), 
+      lm(q4_aggressive ~ treatment + block + q5_aggressive_sean + q6_internal_external + q7_internal_external_sean)]
+
+model_block_baseline_compliers$vcovHC_ <- vcovHC(model_block_baseline_compliers, type = "HC0")
+coeftest(model_block_baseline_compliers, vcov. = model_block_baseline_compliers$vcovHC_)
+
+stargazer(model_block_baseline_compliers,type='text',
+          se = list(sqrt(diag(model_block_baseline_compliers$vcovHC_))),
+          column.labels = "Baseline and Complier Controlled",
+          header = F)
+```
+
+```{r}
+ stargazer(naive_model, model_block_baseline, model_block_baseline_compliers,
+          type = 'html',
+          se = list(sqrt(diag(naive_model$vcovHC_)),
+                    sqrt(diag(model_block_baseline$vcovHC_)),
+                    sqrt(diag(model_block_baseline_compliers$vcovHC_))),
+          column.labels = c("Naive","Two Aggression Scores","Compliers Only"),
+          header = F,
+          report=('vc*sp'))
+```
+
